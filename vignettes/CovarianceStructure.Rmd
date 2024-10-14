@@ -1,0 +1,99 @@
+---
+title: "Covariance Structure"
+output: 
+  bookdown::html_document2:
+      base_format: rmarkdown::html_vignette
+link-citations: TRUE
+vignette: >
+  %\VignetteIndexEntry{Covariance Structure}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(kableExtra)
+```
+
+This vignette details the different covariance structures available in clustTMB. 
+
+## Random Effect Covariance Matrices
+
+```{r table, echo = FALSE, warnings = FALSE}
+tbl <- data.frame(
+  "Covariance" = c("Spatial GMRF", "AR(1)", "Rank Reduction", "Spatial Rank Reduction"),
+  "Notation" = c("gmrf", "ar1", "rr(random = H)", "rr(spatial = H)"),
+  "No. of Parameters" = c("2", "2", "JH - (H(H-1))/2", "1 + JH - (H(H-1))/2"),
+  "Data requirements" = c("spatial coordinates", "unit spaced levels", "", "spatial coordinates")
+)
+kbl(tbl, booktabs = TRUE)
+```
+
+
+### Spatial GMRF
+
+clustTMB fits spatial random effects using a Gaussian Markov Random Field (GMRF). The precision matrix, $Q$, of the GMRF is the inverse of a Matern covariance function and takes two parameters: 1) $\kappa$, which is the spatial decay parameter and a scaled function of the spatial range, $\phi = \sqrt{8}/\kappa$, the distance at which two locations are considered independent; and 2) $\tau$, which is a function of $\kappa$ and the marginal spatial variance $\sigma^{2}$:
+
+$$\tau = \frac{1}{2\sqrt{\pi}\kappa\sigma}.$$
+The precision matrix is approximated following the SPDE-FEM approach [@Lindgren2011], where a constrained Delaunay triangulation network is used to discretize the spatial extent in order to determine a GMRF for a set of irregularly spaced locations, i$. 
+
+$$\omega_{i} \sim GMRF(Q[\kappa, \tau])$$
+
+#### Spatial Example
+Prior to fitting a spatial cluster model with clustTMB, users need to set up the constrained Delaunay Triangulation network using the R package, fmesher. This package provides a CRAN distributed collection of mesh functions developed for the package, R-INLA. For guidance on setting up an appropriate mesh, see [Triangulation details and examples](https://becarioprecario.bitbucket.io/spde-gitbook/ch-intro.html#sec:mesh) and [Tools for mesh assessment](https://becarioprecario.bitbucket.io/spde-gitbook/ch-intro.html#sec:toolsmesh) from 
+```{r spatial example, include = FALSE}
+library(clustTMB)
+# refactor from sp to sf when meuse dataset available through sf
+library(sp) # currently require sp to load meuse dataset
+data("meuse")
+library(fmesher)
+```
+
+In this example, the following mesh specifications were used:
+```{r meuse mesh}
+loc <- meuse[, 1:2]
+Bnd <- fmesher::fm_nonconvex_hull(as.matrix(loc), convex = 200)
+meuse.mesh <- fmesher::fm_mesh_2d(as.matrix(loc),
+  max.edge = c(300, 1000),
+  boundary = Bnd
+)
+```
+
+```{r fig1, fig.height = 3, fig.width = 5, echo = FALSE}
+library(ggplot2)
+library(inlabru)
+ggplot() +
+  gg(meuse.mesh) +
+  geom_point(mapping = aes(x = loc[, 1], y = loc[, 2], size = 0.5), size = 0.5) +
+  theme_classic()
+```
+
+Coordinates are converted to a spatial point dataframe and read into the clustTMB model, along with the mesh, using the spatial.list argument. The gating formula is specified using the gmrf() command:
+```{r set up model}
+Loc <- sf::st_as_sf(loc, coords = c("x", "y"))
+mod <- clustTMB(
+  response = meuse[, 3:6],
+  family = lognormal(link = "identity"),
+  gatingformula = ~ gmrf(0 + 1 | loc),
+  G = 4, covariance.structure = "VVV",
+  spatial.list = list(loc = Loc, mesh = meuse.mesh)
+)
+```
+
+Models are optimized with nlminb(), model results can be viewed with nlminb commands:
+```{r view results}
+# Estimated fixed parameters
+mod$opt$par
+# Minimum negative log likelihood
+mod$opt$objective
+```
+## Gating Network Examples
+
+When random effects, $\mathbb{u}$, are specified in the gating network, the probability of cluster membership $\pi_{i,g}$ for observation $i$ is fit using multinomial regression: 
+
+$$
+\begin{align}
+ \mathbb{\eta}_{,g} &= X\mathbb{\beta}_{,g} + \mathbb{u}_{,g} \\
+ \mathbb{\pi}_{,g} &= \frac{ exp(\mathbb{\eta}_{,g})}{\sum^{G}_{g=1}exp(\mathbb{\eta}_{,g})} 
+ \end{align}
+$$
